@@ -393,7 +393,12 @@ class CovarianceStore:
         store, which visits all of its blocks at each propagation; a long loop that
         meets a new scalar at each step therefore grows the store (as each new array
         result does): its cost per step grows with the number of results correlated
-        with the operands, on the base as well.
+        with the operands, on the base as well. Measured (2026-11-23, `arr + x` for a
+        3-element `arr`): x of 1e2/1e3/1e4 sources 1.3/2.0/9.1 ms (without the
+        lineage, one independent slot: about 1 ms each); a loop of `base + z` with a
+        new scalar `z` of one source as fast as that (200 steps 3.2 s, 400 steps
+        30.8 s), of two sources 1.5 times slower (4.8 s and 46 s against 3.2 s and
+        30.5 s): its source block and combination slot are two more blocks per step.
         """
         key = tuple(terms)
         known = self._lineage_combinations.get(key)
