@@ -1207,6 +1207,39 @@ fn new_battery_cases_are_errors(compared: &mut WitnessReport) {
     }
 }
 
+/// One differing witness for people and as JSON: two numbers with both bit patterns, both decimals and the distance in
+/// ulps; a user witness with only that its result changed and `running_canonical`, its running canonical text (empty
+/// when it has none); anything else with both values as recorded.
+fn differs_row(key: &str, recorded: &str, running: &str, ulps: Option<u64>, running_canonical: Option<String>) -> (String, Value) {
+    let mut entry = json!({ "key": key, "recorded": recorded, "running": running, "ulps": ulps });
+    let mut text = format!("DIFFERS {key}\n");
+    if let (Ok(WitnessValue::Number { mean: m1, uncertainty: u1, unit: a }), Ok(WitnessValue::Number { mean: m2, uncertainty: u2, unit: b })) =
+        (parse_value(recorded), parse_value(running))
+    {
+        let decimal = |bits: u64| format!("{:?}", f64::from_bits(bits));
+        text.push_str(&format!("  recorded: mean {m1:016x} ({}), uncertainty {u1:016x} ({}), unit {a:?}\n", decimal(m1), decimal(u1)));
+        text.push_str(&format!("  running:  mean {m2:016x} ({}), uncertainty {u2:016x} ({}), unit {b:?}\n", decimal(m2), decimal(u2)));
+        text.push_str(&match ulps {
+            Some(1) => "  distance: 1 ulp\n".to_string(),
+            Some(n) => format!("  distance: {n} ulps\n"),
+            None => "  distance: not measurable in ulps (a unit, a sign or a non-finite value differs)\n".to_string(),
+        });
+        entry["recorded_decimal"] = json!({ "mean": decimal(m1), "uncertainty": decimal(u1) });
+        entry["running_decimal"] = json!({ "mean": decimal(m2), "uncertainty": decimal(u2) });
+        return (text, entry);
+    }
+    text.push_str(&format!("  recorded: {recorded}\n  running:  {running}\n"));
+    if key.starts_with("user.") {
+        text.push_str("  a user witness records a hash: only that its result changed is shown; the running canonical result (compare it with a copy kept outside):\n");
+        let running_text = running_canonical.unwrap_or_default();
+        for line in running_text.lines() {
+            text.push_str(&format!("  | {line}\n"));
+        }
+        entry["running_canonical"] = Value::from(running_text);
+    }
+    (text, entry)
+}
+
 /// The rows of a witness comparison for people and as JSON (`match`, `differs`, `missing`, `new`, `errors`): the
 /// differing witnesses first (numbers with both bit patterns, both decimals and the distance in ulps; a user witness
 /// only that its result changed, with the running canonical text), then the missing, the new and the errors, then
@@ -1222,32 +1255,8 @@ fn witness_rows(compared: &WitnessReport, run: &WitnessRun) -> (String, Value) {
     let (mut differs, mut missing_keys, mut new_keys, mut error_rows) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for row in &compared.rows {
         if let WitnessStatus::Differs { recorded, running, ulps } = &row.status {
-            let mut entry = json!({ "key": row.key, "recorded": recorded, "running": running, "ulps": ulps });
-            text.push_str(&format!("DIFFERS {}\n", row.key));
-            match (parse_value(recorded), parse_value(running)) {
-                (Ok(WitnessValue::Number { mean: m1, uncertainty: u1, unit: a }), Ok(WitnessValue::Number { mean: m2, uncertainty: u2, unit: b })) => {
-                    let decimal = |bits: u64| format!("{:?}", f64::from_bits(bits));
-                    text.push_str(&format!("  recorded: mean {m1:016x} ({}), uncertainty {u1:016x} ({}), unit {a:?}\n", decimal(m1), decimal(u1)));
-                    text.push_str(&format!("  running:  mean {m2:016x} ({}), uncertainty {u2:016x} ({}), unit {b:?}\n", decimal(m2), decimal(u2)));
-                    match ulps {
-                        Some(1) => text.push_str("  distance: 1 ulp\n"),
-                        Some(n) => text.push_str(&format!("  distance: {n} ulps\n")),
-                        None => text.push_str("  distance: not measurable in ulps (a unit, a sign or a non-finite value differs)\n"),
-                    }
-                    entry["recorded_decimal"] = json!({ "mean": decimal(m1), "uncertainty": decimal(u1) });
-                    entry["running_decimal"] = json!({ "mean": decimal(m2), "uncertainty": decimal(u2) });
-                }
-                _ if row.key.starts_with("user.") => {
-                    text.push_str(&format!("  recorded: {recorded}\n  running:  {running}\n"));
-                    text.push_str("  a user witness records a hash: only that its result changed is shown; the running canonical result (compare it with a copy kept outside):\n");
-                    let running_text = canonical(&row.key).unwrap_or_default();
-                    for line in running_text.lines() {
-                        text.push_str(&format!("  | {line}\n"));
-                    }
-                    entry["running_canonical"] = Value::from(running_text);
-                }
-                _ => text.push_str(&format!("  recorded: {recorded}\n  running:  {running}\n")),
-            }
+            let (row_text, entry) = differs_row(&row.key, recorded, running, *ulps, canonical(&row.key));
+            text.push_str(&row_text);
             differs.push(entry);
         }
     }
