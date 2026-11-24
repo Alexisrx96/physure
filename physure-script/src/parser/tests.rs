@@ -603,3 +603,175 @@ use super::*;
             parse_phs_with_lines(separated).unwrap_or_else(|e| panic!("{separated:?}: {e}"));
         }
     }
+
+    fn render_nesting_tokens(code: &str) -> String {
+        nesting_tokens(code)
+            .into_iter()
+            .map(|(token, indented)| {
+                let text = match token {
+                    NestingToken::Word(word) => format!("W:{word}"),
+                    NestingToken::Symbol(symbol) => format!("S:{symbol}"),
+                    NestingToken::Text => "T".to_string(),
+                    NestingToken::Doc => "D".to_string(),
+                    NestingToken::LineEnd => "NL".to_string(),
+                };
+                if indented { format!("^{text}") } else { text }
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    const NESTING_TOKEN_CASES: &[&str] = &[
+        "",
+        "x = 1",
+        "x = 1\ny = 2\r\nz = 3\rw",
+        "  a\n\tb c\n \t d",
+        "# a comment ( [ {\nx",
+        "a // comment (\n// whole line\n/// a doc\n  /// indented doc\nb",
+        "a ```raw ( [ ``` b ```unclosed (",
+        "s = \"a ( string\" + \"unclosed (",
+        "_x1 é_2 π 3.5e-3 m/s^2",
+        "f(a, [b], {c}) => kg; ? : @dec",
+        "   \n  x\n\n  (y)",
+        "``",
+        "`` x",
+        "/",
+        "\"\"",
+        "```",
+        "x\r\n  y\r\n\r\n",
+    ];
+
+    fn nesting_verdict(code: &str) -> String {
+        match check_nesting_depth(code) {
+            Ok(()) => "ok".to_string(),
+            Err(error) => error.to_string(),
+        }
+    }
+
+    fn nesting_cases() -> Vec<(String, String)> {
+        let mut cases = Vec::new();
+        for n in [63, 64, 65] {
+            cases.push((format!("{n} brackets"), format!("{}1{}", "(".repeat(n), ")".repeat(n))));
+            cases.push((format!("{n} mixed brackets"), format!("{}1", "[{(".repeat(n / 3 + 1).chars().take(n).collect::<String>())));
+            cases.push((format!("{n} if chain"), format!("x = {}1", "if a then ".repeat(n))));
+            cases.push((format!("{n} else if chain"), format!("x = if a then 1 {}2", "else if b then 1 ".repeat(n - 1))));
+            cases.push((format!("{n} if if"), format!("x = {}a", "if ".repeat(n))));
+            cases.push((format!("{n} fresh ifs"), format!("x = {}", "if a then 1 else 2 + ".repeat(n))));
+            cases.push((format!("{n} indented bodies"), (0..n).map(|i| format!("{}fn f{i}(x) =\n", " ".repeat(i))).collect()));
+            cases.push((format!("{n} column-0 bodies"), (0..n).map(|i| format!("fn f{i}(x) =\n")).collect()));
+            cases.push((format!("{n} bodies continued by then"), (0..n).map(|i| format!("then f{i} =\n")).collect()));
+            cases.push((format!("{n} bodies after decorators"), (0..n).map(|i| format!("@stable\nf{i} =\n")).collect()));
+            cases.push((format!("{n} bodies after docs"), (0..n).map(|i| format!("/// doc\nf{i} =\n")).collect()));
+            cases.push((format!("{n} bodies after a comma"), (0..n).map(|i| format!("f{i} =\n,\n")).collect()));
+            cases.push((format!("{n} bodies in brackets"), format!("({}", (0..n).map(|i| format!("f{i} =\n")).collect::<String>())));
+            cases.push((format!("{n} brackets with an if chain each"), format!("{}1", "if a then if b then (".repeat(n / 3 + 1))));
+            cases.push((format!("{n} closed groups with chains"), "(if a then if b then 1) ".repeat(n)));
+            cases.push((format!("{n} bodies then brackets"), format!("{}{}", (0..n / 2).map(|i| format!("f{i} =\n")).collect::<String>().replace("\nf", "\n f"), "(".repeat(n / 2 + 1))));
+            cases.push((format!("{n} bodies reset by statements"), (0..n).map(|i| format!("f{i} =\n  1\ng = 2\n")).collect()));
+            cases.push((format!("{n} bodies not reset when indented"), (0..n).map(|i| format!(" f{i} =\n  1\n")).collect()));
+        }
+        cases.push(("extra closers".to_string(), ")))]]}}} (((".to_string()));
+        cases.push(("words that continue".to_string(), "a =\nand b =\nor c =\nin d =\nelse e =\n: f =\n} g =\nh".to_string()));
+        cases.push(("line ends that continue".to_string(), "a if\nb =\nc then\nd =\ne where\nf =\ng ?\nh =\ni {\nj =\nk".to_string()));
+        cases
+    }
+
+    /// Characterization (sonar S3776 cleanup): the tokens the nesting count reads, as they were before the
+    /// lexer was split into helpers.
+    #[test]
+    fn the_nesting_tokens_are_pinned() {
+        let expected: &[(&str, &str)] = &[
+            ("", ""),
+            ("x = 1", "W:x S:= W:1"),
+            ("x = 1\ny = 2\r\nz = 3\rw", "W:x S:= W:1 NL W:y S:= W:2 NL W:z S:= W:3 NL W:w"),
+            ("  a\n\tb c\n \t d", "^W:a NL ^W:b W:c NL ^W:d"),
+            ("# a comment ( [ {\nx", "NL W:x"),
+            ("a // comment (\n// whole line\n/// a doc\n  /// indented doc\nb", "W:a NL NL D NL ^D NL W:b"),
+            ("a ```raw ( [ ``` b ```unclosed (", "W:a T W:b T"),
+            ("s = \"a ( string\" + \"unclosed (", "W:s S:= T S:+ T"),
+            ("_x1 é_2 π 3.5e-3 m/s^2", "W:_x1 W:é_2 W:π W:3 S:. W:5e S:- W:3 W:m S:/ W:s S:^ W:2"),
+            ("f(a, [b], {c}) => kg; ? : @dec", "W:f S:( W:a S:, S:[ W:b S:] S:, S:{ W:c S:} S:) S:= S:> W:kg S:; S:? S:: S:@ W:dec"),
+            ("   \n  x\n\n  (y)", "^NL ^W:x NL NL ^S:( W:y S:)"),
+            ("``", "S:` S:`"),
+            ("`` x", "S:` S:` W:x"),
+            ("/", "S:/"),
+            ("\"\"", "T"),
+            ("```", "T"),
+            ("x\r\n  y\r\n\r\n", "W:x NL ^W:y NL NL"),
+        ];
+        assert_eq!(expected.len(), NESTING_TOKEN_CASES.len());
+        for ((code, tokens), case) in expected.iter().zip(NESTING_TOKEN_CASES) {
+            assert_eq!(code, case);
+            assert_eq!(render_nesting_tokens(code), *tokens, "{code:?}");
+        }
+    }
+
+    /// Characterization (sonar S3776 cleanup): what the nesting count says of sources around its limit.
+    #[test]
+    fn the_nesting_verdicts_are_pinned() {
+        let expected: &[(&str, &str)] = &[
+            ("63 brackets", "ok"),
+            ("63 mixed brackets", "ok"),
+            ("63 if chain", "ok"),
+            ("63 else if chain", "ok"),
+            ("63 if if", "ok"),
+            ("63 fresh ifs", "ok"),
+            ("63 indented bodies", "ok"),
+            ("63 column-0 bodies", "ok"),
+            ("63 bodies continued by then", "ok"),
+            ("63 bodies after decorators", "ok"),
+            ("63 bodies after docs", "ok"),
+            ("63 bodies after a comma", "ok"),
+            ("63 bodies in brackets", "ok"),
+            ("63 brackets with an if chain each", "Parse error: `if` expressions are nested more than 64 levels deep"),
+            ("63 closed groups with chains", "ok"),
+            ("63 bodies then brackets", "ok"),
+            ("63 bodies reset by statements", "ok"),
+            ("63 bodies not reset when indented", "ok"),
+            ("64 brackets", "ok"),
+            ("64 mixed brackets", "ok"),
+            ("64 if chain", "ok"),
+            ("64 else if chain", "ok"),
+            ("64 if if", "ok"),
+            ("64 fresh ifs", "ok"),
+            ("64 indented bodies", "ok"),
+            ("64 column-0 bodies", "ok"),
+            ("64 bodies continued by then", "ok"),
+            ("64 bodies after decorators", "ok"),
+            ("64 bodies after docs", "ok"),
+            ("64 bodies after a comma", "ok"),
+            ("64 bodies in brackets", "Parse error: function bodies are nested more than 64 levels deep"),
+            ("64 brackets with an if chain each", "Parse error: `if` expressions are nested more than 64 levels deep"),
+            ("64 closed groups with chains", "ok"),
+            ("64 bodies then brackets", "Parse error: brackets are nested more than 64 levels deep"),
+            ("64 bodies reset by statements", "ok"),
+            ("64 bodies not reset when indented", "ok"),
+            ("65 brackets", "Parse error: brackets are nested more than 64 levels deep"),
+            ("65 mixed brackets", "Parse error: brackets are nested more than 64 levels deep"),
+            ("65 if chain", "Parse error: `if` expressions are nested more than 64 levels deep"),
+            ("65 else if chain", "Parse error: `if` expressions are nested more than 64 levels deep"),
+            ("65 if if", "Parse error: `if` expressions are nested more than 64 levels deep"),
+            ("65 fresh ifs", "ok"),
+            ("65 indented bodies", "Parse error: brackets are nested more than 64 levels deep"),
+            ("65 column-0 bodies", "Parse error: brackets are nested more than 64 levels deep"),
+            ("65 bodies continued by then", "Parse error: function bodies are nested more than 64 levels deep"),
+            ("65 bodies after decorators", "Parse error: function bodies are nested more than 64 levels deep"),
+            ("65 bodies after docs", "Parse error: function bodies are nested more than 64 levels deep"),
+            ("65 bodies after a comma", "Parse error: function bodies are nested more than 64 levels deep"),
+            ("65 bodies in brackets", "Parse error: function bodies are nested more than 64 levels deep"),
+            ("65 brackets with an if chain each", "Parse error: `if` expressions are nested more than 64 levels deep"),
+            ("65 closed groups with chains", "ok"),
+            ("65 bodies then brackets", "Parse error: brackets are nested more than 64 levels deep"),
+            ("65 bodies reset by statements", "ok"),
+            ("65 bodies not reset when indented", "Parse error: function bodies are nested more than 64 levels deep"),
+            ("extra closers", "ok"),
+            ("words that continue", "ok"),
+            ("line ends that continue", "ok"),
+        ];
+        let cases = nesting_cases();
+        assert_eq!(expected.len(), cases.len());
+        for ((name, verdict), (case, code)) in expected.iter().zip(&cases) {
+            assert_eq!(name, case);
+            assert_eq!(nesting_verdict(code), *verdict, "{name}");
+        }
+    }
