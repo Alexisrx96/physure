@@ -702,6 +702,45 @@ type Listing = Vec<(Entry, String)>;
 /// The sections a `show` of the catalog groups several kinds under: the kind is shown with the key there.
 const POOLED_SECTIONS: [&str; 4] = ["units", "atomic_weights", "thermochemistry", "settings"];
 
+/// The catalog `show` lists, each entry with its origin: that of the frozen file in force (with its path), or the
+/// unfrozen one of the working directory (with the warnings of its reading). `Err` is the failure to report.
+fn show_listing() -> Result<(Listing, Vec<String>, Option<PathBuf>), Outcome> {
+    let Some(active) = active().map_err(|e| failure("show", e.exit_code(), e.to_string()))? else {
+        let (found, warnings) = unfrozen_listing().map_err(|message| failure("show", 1, message))?;
+        return Ok((found, warnings, None));
+    };
+    match entries_with_origin(&active.catalog.file) {
+        Ok(found) => Ok((found.into_iter().map(|(entry, origin)| (entry, origin.to_string())).collect(), Vec::new(), Some(active.path.clone()))),
+        Err((source, problems)) => Err(failure("show", 1, format!("{}: source {source} does not replay: {}", shown(&active.path), problems.join("; ")))),
+    }
+}
+
+/// The chosen entries as `show` prints them (`section.key (kind) = value  [origin]`, sorted; the kind only in a
+/// pooled section, the origin only when asked) and as JSON rows.
+fn show_rows(chosen: &[&(Entry, String)], with_origin: bool) -> (String, Vec<Value>) {
+    let mut rows: Vec<(String, String, &str, &str, &str)> = chosen
+        .iter()
+        .map(|(entry, origin)| {
+            let (section, key) = section_and_key(entry);
+            (section, key, entry.kind, entry.value.as_str(), origin.as_str())
+        })
+        .collect();
+    rows.sort();
+    let mut text = String::new();
+    let mut json_rows = Vec::with_capacity(rows.len());
+    for (section, key, kind, value, origin) in &rows {
+        let kind_shown = if POOLED_SECTIONS.contains(&section.as_str()) { format!(" ({kind})") } else { String::new() };
+        let origin_shown = if with_origin { format!("  [{origin}]") } else { String::new() };
+        text.push_str(&format!("{section}.{key}{kind_shown} = {value}{origin_shown}\n"));
+        let mut row = json!({ "section": section, "key": key, "kind": kind, "value": value });
+        if with_origin {
+            row["origin"] = Value::from(*origin);
+        }
+        json_rows.push(row);
+    }
+    (text, json_rows)
+}
+
 /// `phs conf show [SELECTOR] [--origin]`: the catalog in force. Unlike the other commands it needs the configuration
 /// in force to be usable (decision 2 of the Phase 2 plan), so a broken file is its exit code (1, 2 or 3).
 fn show(args: &ConfArgs) -> Outcome {
@@ -709,18 +748,9 @@ fn show(args: &ConfArgs) -> Outcome {
         return failure("show", e.exit_code(), e.to_string());
     }
     let selector = args.positional.first().map_or("", String::as_str);
-    let (listed, warnings, path): (Listing, Vec<String>, Option<PathBuf>) = match active() {
-        Err(e) => return failure("show", e.exit_code(), e.to_string()),
-        Ok(Some(active)) => match entries_with_origin(&active.catalog.file) {
-            Ok(found) => (found.into_iter().map(|(entry, origin)| (entry, origin.to_string())).collect(), Vec::new(), Some(active.path.clone())),
-            Err((source, problems)) => {
-                return failure("show", 1, format!("{}: source {source} does not replay: {}", shown(&active.path), problems.join("; ")))
-            }
-        },
-        Ok(None) => match unfrozen_listing() {
-            Ok((found, warnings)) => (found, warnings, None),
-            Err(message) => return failure("show", 1, message),
-        },
+    let (listed, warnings, path) = match show_listing() {
+        Ok(listing) => listing,
+        Err(outcome) => return outcome,
     };
     let chosen = select(&listed, selector);
     if chosen.is_empty() {
@@ -734,27 +764,7 @@ fn show(args: &ConfArgs) -> Outcome {
             ),
         );
     }
-    let mut rows: Vec<(String, String, &str, &str, &str)> = chosen
-        .iter()
-        .map(|(entry, origin)| {
-            let (section, key) = section_and_key(entry);
-            (section, key, entry.kind, entry.value.as_str(), origin.as_str())
-        })
-        .collect();
-    rows.sort();
-    let mut text = String::new();
-    let mut json_rows = Vec::with_capacity(rows.len());
-    for (section, key, kind, value, origin) in &rows {
-        let kind_shown = if POOLED_SECTIONS.contains(&section.as_str()) { format!(" ({kind})") } else { String::new() };
-        let origin_shown = if args.origin { format!("  [{origin}]") } else { String::new() };
-        text.push_str(&format!("{section}.{key}{kind_shown} = {value}{origin_shown}
-"));
-        let mut row = json!({ "section": section, "key": key, "kind": kind, "value": value });
-        if args.origin {
-            row["origin"] = Value::from(*origin);
-        }
-        json_rows.push(row);
-    }
+    let (text, json_rows) = show_rows(&chosen, args.origin);
     if !args.json {
         for warning in &warnings {
             say_error(&format!("phs conf: warning: {}\n", escape_controls(warning)));
