@@ -305,7 +305,7 @@ fn side(function: &mut Function, levels: usize, point: impl Fn(usize) -> (f64, f
     // every finite or overflowing magnitude, in order, for the decay and divergence tests
     let mut magnitudes: Vec<f64> = Vec::new();
     let mut table: Vec<Vec<f64>> = Vec::new();
-    let (mut best, mut best_error, mut best_at) = (f64::NAN, f64::INFINITY, (0, 0));
+    let mut best = Best { value: f64::NAN, error: f64::INFINITY, at: (0, 0) };
     let mut agreements = 0;
     let mut undefined = 0;
     let mut why = "the last step was reached";
@@ -315,72 +315,120 @@ fn side(function: &mut Function, levels: usize, point: impl Fn(usize) -> (f64, f
             why = "the spacing of f64 next to the point was reached";
             break;
         }
-        let Some(q) = function.sample(x)? else {
-            if !magnitudes.is_empty() {
-                return Err(refusal(format!(
-                    "the expression is undefined at {} although it is defined farther from the point",
-                    function.describe(x)
-                )));
-            }
-            undefined += 1;
+        let Some(q) = defined_sample(function, x, !magnitudes.is_empty(), &mut undefined)? else {
             continue;
         };
-        if undefined > 0 {
-            return Err(refusal(format!(
-                "the expression is undefined farther from the point than {}, where it is defined",
-                function.describe(x)
-            )));
-        }
         let v = q.value.mean();
-        if v.is_infinite() {
+        if let Some(reason) = stop_sampling(&magnitudes, v) {
             magnitudes.push(v);
-            why = "a sample overflowed";
-            break;
-        }
-        if magnitudes.last() == Some(&v) && magnitudes.iter().any(|&m| m != v) {
-            magnitudes.push(v);
-            why = "two samples were equal: rounding has swallowed the change of the variable";
+            why = reason;
             break;
         }
         magnitudes.push(v);
         hs.push(h);
         samples.push(q);
-        let n = hs.len() - 1;
-        let mut row = vec![v];
-        for j in 1..=n {
-            let entry = (row[j - 1] * -hs[n - j] + table[n - 1][j - 1] * hs[n]) / (hs[n] - hs[n - j]);
-            let error = (entry - row[j - 1]).abs().max((entry - table[n - 1][j - 1]).abs());
-            row.push(entry);
-            if error <= best_error {
-                (best, best_error, best_at) = (entry, error, (n, j));
-            }
-        }
+        let row = neville_row(&table, &hs, v, &mut best);
         table.push(row);
-        let scale = magnitudes.iter().fold(0.0f64, |a, m| a.max(m.abs()));
-        let approaching = (v - best).abs() <= (magnitudes[0] - best).abs();
-        if n >= MIN_LEVEL && best_error <= TOLERANCE * best.abs().max(scale) && approaching && diverges(&magnitudes) == 0.0 {
-            agreements += 1;
-            if agreements == 2 {
-                let (n, j) = best_at;
-                let weighted = (n - j..=n).map(|i| (samples[i].clone(), lagrange_at_zero(&hs[n - j..=n], i - (n - j)))).collect();
-                return Ok(Side::Converged { value: best, error: best_error, scale, weighted });
-            }
-        } else {
-            agreements = 0;
+        agreements = if settled(hs.len() - 1, &best, &magnitudes, v) { agreements + 1 } else { 0 };
+        if agreements == 2 {
+            return Ok(converged(&best, &hs, &samples, scale_of(&magnitudes)));
         }
     }
+    Ok(verdict(&magnitudes, &best, why))
+}
+
+/// The best extrapolation of the Neville table so far: its value, its error estimate, and its place `(n, j)`.
+struct Best {
+    value: f64,
+    error: f64,
+    at: (usize, usize),
+}
+
+/// The sample at `x` when the expression is defined there, `None` when it is not (counted in `undefined`). The
+/// expression must be defined on one run of samples next to the point: undefined after a defined sample
+/// (`seen_defined`), or defined after an undefined one, is refused.
+fn defined_sample(function: &mut Function, x: f64, seen_defined: bool, undefined: &mut usize) -> PhysureResult<Option<Quantity>> {
+    match function.sample(x)? {
+        None if seen_defined => Err(refusal(format!(
+            "the expression is undefined at {} although it is defined farther from the point",
+            function.describe(x)
+        ))),
+        None => {
+            *undefined += 1;
+            Ok(None)
+        }
+        Some(_) if *undefined > 0 => Err(refusal(format!(
+            "the expression is undefined farther from the point than {}, where it is defined",
+            function.describe(x)
+        ))),
+        Some(q) => Ok(Some(q)),
+    }
+}
+
+/// Why sampling stops at the magnitude `v`, after `magnitudes`: it overflowed, or it repeats the last one after
+/// they changed (rounding swallowed the step). `None` to go on.
+fn stop_sampling(magnitudes: &[f64], v: f64) -> Option<&'static str> {
+    if v.is_infinite() {
+        return Some("a sample overflowed");
+    }
+    if magnitudes.last() == Some(&v) && magnitudes.iter().any(|&m| m != v) {
+        return Some("two samples were equal: rounding has swallowed the change of the variable");
+    }
+    None
+}
+
+/// The row of the Neville table for the newest sample `v` (at `hs`'s last step), from the row above it; `best`
+/// becomes any entry whose error estimate is no larger than its own.
+fn neville_row(table: &[Vec<f64>], hs: &[f64], v: f64, best: &mut Best) -> Vec<f64> {
+    let n = hs.len() - 1;
+    let mut row = vec![v];
+    for j in 1..=n {
+        let entry = (row[j - 1] * -hs[n - j] + table[n - 1][j - 1] * hs[n]) / (hs[n] - hs[n - j]);
+        let error = (entry - row[j - 1]).abs().max((entry - table[n - 1][j - 1]).abs());
+        row.push(entry);
+        if error <= best.error {
+            *best = Best { value: entry, error, at: (n, j) };
+        }
+    }
+    row
+}
+
+/// The largest magnitude sampled.
+fn scale_of(magnitudes: &[f64]) -> f64 {
+    magnitudes.iter().fold(0.0f64, |a, m| a.max(m.abs()))
+}
+
+/// Whether the extrapolation agrees with itself at row `n` (newest magnitude `v`): deep enough, within the
+/// tolerance of the samples' size, approached by the samples, and not diverging.
+fn settled(n: usize, best: &Best, magnitudes: &[f64], v: f64) -> bool {
+    let approaching = (v - best.value).abs() <= (magnitudes[0] - best.value).abs();
+    n >= MIN_LEVEL
+        && best.error <= TOLERANCE * best.value.abs().max(scale_of(magnitudes))
+        && approaching
+        && diverges(magnitudes) == 0.0
+}
+
+/// The converged side: the best extrapolation, and the samples of its place in the table with their weights.
+fn converged(best: &Best, hs: &[f64], samples: &[Quantity], scale: f64) -> Side {
+    let (n, j) = best.at;
+    let weighted = (n - j..=n).map(|i| (samples[i].clone(), lagrange_at_zero(&hs[n - j..=n], i - (n - j)))).collect();
+    Side::Converged { value: best.value, error: best.error, scale, weighted }
+}
+
+/// What a side gave when its extrapolation did not converge: nothing defined, a decay to 0, a divergence, or the
+/// best estimate and why sampling stopped.
+fn verdict(magnitudes: &[f64], best: &Best, why: &'static str) -> Side {
     if magnitudes.is_empty() {
-        return Ok(Side::Absent);
+        return Side::Absent;
     }
-    if decays(&magnitudes) {
-        let scale = magnitudes.iter().fold(0.0f64, |a, m| a.max(m.abs()));
-        return Ok(Side::Converged { value: 0.0, error: 0.0, scale, weighted: Vec::new() });
+    if decays(magnitudes) {
+        return Side::Converged { value: 0.0, error: 0.0, scale: scale_of(magnitudes), weighted: Vec::new() };
     }
-    let infinity = diverges(&magnitudes);
+    let infinity = diverges(magnitudes);
     if infinity != 0.0 {
-        return Ok(Side::Infinite(infinity));
+        return Side::Infinite(infinity);
     }
-    Ok(Side::Unsettled { estimate: best, error: best_error, why })
+    Side::Unsettled { estimate: best.value, error: best.error, why }
 }
 
 /// The weight of the sample at `nodes[i]` in the value at 0 of the polynomial through all `nodes`.
@@ -532,82 +580,106 @@ pub(crate) fn limit(
     let mut function = Function { interpreter, expr, env, var: var.to_string(), var_unit, unit: None };
 
     match point {
-        Point::Infinite(infinity) => {
-            if approach != Approach::Both {
-                let at = if infinity > 0.0 { "+inf" } else { "-inf" };
-                return Err(refusal(format!(
-                    "the point {at} is approached from one side only; leave out the side (\"+\" or \"-\" is for a finite point)"
-                )));
-            }
-            let sign = infinity.signum();
-            let approach = side(&mut function, INFINITE_LEVELS, |k| {
-                let distance = 8.0 * 2f64.powi(k as i32);
-                (sign * distance, 1.0 / distance)
-            })?;
-            let at = if sign > 0.0 { "+inf" } else { "-inf" };
-            match approach {
-                Side::Absent => Err(refusal(format!("the expression is undefined towards {at}"))),
-                Side::Converged { value, weighted, .. } => answer(value, &weighted, &function),
-                Side::Infinite(infinity) => answer(infinity, &[], &function),
-                Side::Unsettled { estimate, error, why } => Err(unsettled(&format!("towards {at}"), estimate, error, why)),
-            }
-        }
-        Point::Finite(p) => {
-            let h0 = first_step(mean);
-            let directions: &[f64] = match approach {
-                Approach::Both => &[-1.0, 1.0],
-                Approach::FromRight => &[1.0],
-                Approach::FromLeft => &[-1.0],
-            };
-            // the first step of each side at which the expression is defined; a side where it is defined nowhere
-            // next to the point is an error, also for a two-sided limit (the limit within the domain is a one-sided one)
-            let mut starts: Vec<(f64, f64)> = Vec::new();
-            let mut undefined: Vec<(f64, f64)> = Vec::new();
-            for &direction in directions {
-                match first_defined_step(&mut function, mean, direction, h0)? {
-                    Ok(h) => starts.push((direction, h)),
-                    Err(closest) => undefined.push((direction, closest)),
-                }
-            }
-            if !undefined.is_empty() {
-                return Err(undefined_side(&function, mean, h0, approach, &undefined));
-            }
-            // the value at the point is the limit for an expression continuous on its domain, defined there and on
-            // each side that is approached (so `sqrt(x)` at 0 is not a two-sided limit, `1/(x - 1e-9)` at 0 from the
-            // right is its value at 0, not the samples past the pole)
-            // ... and defined at the closest sample of each of those sides too, so a point that is isolated from the
-            // rest of the domain (`sqrt(x^2 (x^2 - 1e-4))` at 0: defined at 0 and for |x| >= 0.01) is not taken
-            if trusted_at_point && defined_next_to(&mut function, mean, &starts)? {
-                // the point as it was written (its unit and uncertainty), not its value in the sampling unit
-                let at = if p.unit.is_plain_number() && p.value.std_dev() == 0.0 {
-                    PhsValue::Number(p.value.mean())
-                } else {
-                    PhsValue::Quantity(p.clone())
-                };
-                if let Some(value) = function.raw(at, mean)? {
-                    let finite = match &value {
-                        PhsValue::Number(n) => n.is_finite(),
-                        PhsValue::Quantity(q) => q.value.mean().is_finite(),
-                        _ => false,
-                    };
-                    if finite {
-                        return Ok(plain_when_possible(value));
-                    }
-                }
-            }
-            if p.value.std_dev() > 0.0 {
-                return Err(refusal(format!(
-                    "the point {p} is uncertain, and the limit there is extrapolated (the expression is not evaluated at \
-                     the point itself): an extrapolated limit has no derivative with respect to its point to propagate the uncertainty with"
-                )));
-            }
-            match *starts.as_slice() {
-                [(direction, h)] => one_sided(&mut function, mean, direction, h),
-                [(_, left), (_, right)] => two_sided(&mut function, mean, left, right),
-                _ => unreachable!("one or two sides are approached"),
-            }
+        Point::Infinite(infinity) => limit_at_infinity(&mut function, infinity, approach),
+        Point::Finite(p) => limit_at_finite_point(&mut function, &p, mean, approach, trusted_at_point),
+    }
+}
+
+/// The limit towards `infinity` (`+inf` or `-inf`), which has no side.
+fn limit_at_infinity(function: &mut Function, infinity: f64, approach: Approach) -> PhysureResult<PhsValue> {
+    if approach != Approach::Both {
+        let at = if infinity > 0.0 { "+inf" } else { "-inf" };
+        return Err(refusal(format!(
+            "the point {at} is approached from one side only; leave out the side (\"+\" or \"-\" is for a finite point)"
+        )));
+    }
+    let sign = infinity.signum();
+    let approach = side(function, INFINITE_LEVELS, |k| {
+        let distance = 8.0 * 2f64.powi(k as i32);
+        (sign * distance, 1.0 / distance)
+    })?;
+    let at = if sign > 0.0 { "+inf" } else { "-inf" };
+    match approach {
+        Side::Absent => Err(refusal(format!("the expression is undefined towards {at}"))),
+        Side::Converged { value, weighted, .. } => answer(value, &weighted, function),
+        Side::Infinite(infinity) => answer(infinity, &[], function),
+        Side::Unsettled { estimate, error, why } => Err(unsettled(&format!("towards {at}"), estimate, error, why)),
+    }
+}
+
+/// The limit at the finite point `p` (`mean` in the sampling unit) from the sides of `approach`.
+fn limit_at_finite_point(
+    function: &mut Function,
+    p: &Quantity,
+    mean: f64,
+    approach: Approach,
+    trusted_at_point: bool,
+) -> PhysureResult<PhsValue> {
+    let starts = first_defined_steps(function, mean, approach)?;
+    // the value at the point is the limit for an expression continuous on its domain, defined there and on
+    // each side that is approached (so `sqrt(x)` at 0 is not a two-sided limit, `1/(x - 1e-9)` at 0 from the
+    // right is its value at 0, not the samples past the pole)
+    // ... and defined at the closest sample of each of those sides too, so a point that is isolated from the
+    // rest of the domain (`sqrt(x^2 (x^2 - 1e-4))` at 0: defined at 0 and for |x| >= 0.01) is not taken
+    if trusted_at_point && defined_next_to(function, mean, &starts)? {
+        if let Some(value) = finite_value_at_point(function, p, mean)? {
+            return Ok(plain_when_possible(value));
         }
     }
+    if p.value.std_dev() > 0.0 {
+        return Err(refusal(format!(
+            "the point {p} is uncertain, and the limit there is extrapolated (the expression is not evaluated at \
+             the point itself): an extrapolated limit has no derivative with respect to its point to propagate the uncertainty with"
+        )));
+    }
+    match *starts.as_slice() {
+        [(direction, h)] => one_sided(function, mean, direction, h),
+        [(_, left), (_, right)] => two_sided(function, mean, left, right),
+        _ => unreachable!("one or two sides are approached"),
+    }
+}
+
+/// The first step of each side of `p` that `approach` takes at which the expression is defined, as `(direction,
+/// step)`; a side where it is defined nowhere next to the point is an error, also for a two-sided limit (the limit
+/// within the domain is a one-sided one).
+fn first_defined_steps(function: &mut Function, p: f64, approach: Approach) -> PhysureResult<Vec<(f64, f64)>> {
+    let h0 = first_step(p);
+    let directions: &[f64] = match approach {
+        Approach::Both => &[-1.0, 1.0],
+        Approach::FromRight => &[1.0],
+        Approach::FromLeft => &[-1.0],
+    };
+    let mut starts: Vec<(f64, f64)> = Vec::new();
+    let mut undefined: Vec<(f64, f64)> = Vec::new();
+    for &direction in directions {
+        match first_defined_step(function, p, direction, h0)? {
+            Ok(h) => starts.push((direction, h)),
+            Err(closest) => undefined.push((direction, closest)),
+        }
+    }
+    if !undefined.is_empty() {
+        return Err(undefined_side(function, p, h0, approach, &undefined));
+    }
+    Ok(starts)
+}
+
+/// The value of the expression at the point `p` as it was written (its unit and uncertainty, not its value `mean`
+/// in the sampling unit), when it is defined and finite there.
+fn finite_value_at_point(function: &mut Function, p: &Quantity, mean: f64) -> PhysureResult<Option<PhsValue>> {
+    let at = if p.unit.is_plain_number() && p.value.std_dev() == 0.0 {
+        PhsValue::Number(p.value.mean())
+    } else {
+        PhsValue::Quantity(p.clone())
+    };
+    let Some(value) = function.raw(at, mean)? else {
+        return Ok(None);
+    };
+    let finite = match &value {
+        PhsValue::Number(n) => n.is_finite(),
+        PhsValue::Quantity(q) => q.value.mean().is_finite(),
+        _ => false,
+    };
+    Ok(finite.then_some(value))
 }
 
 /// `x - p` or `p - x` written as the inequality `x < p` / `x > p` in the variable's unit.
