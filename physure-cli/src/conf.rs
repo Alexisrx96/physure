@@ -1048,6 +1048,20 @@ fn findings_text(report: &physure_script::report::Report) -> String {
         .join("; ")
 }
 
+/// The line `verify --expect SEAL` adds, and whether the seal of the inspected file is the one expected: a file that
+/// does not verify says that its stored seal vouches for nothing.
+fn expected_seal_line(inspection: &Inspection, expected: &str) -> (String, bool) {
+    if inspection.seal_matches(expected) {
+        return ("expected seal: matches\n".to_string(), true);
+    }
+    let why = if inspection.unreadable.is_some() || !inspection.problems.is_empty() {
+        " (the file does not verify, so its stored seal vouches for nothing)"
+    } else {
+        ""
+    };
+    (format!("expected seal: the seal does not match --expect {expected}{why}\n"), false)
+}
+
 /// `phs conf verify [FILE] [--expect SEAL] [--run [--timeout-ms N]]`.
 fn verify(args: &ConfArgs) -> Outcome {
     let path = match target("verify", args) {
@@ -1060,21 +1074,12 @@ fn verify(args: &ConfArgs) -> Outcome {
     fields["seal_matches"] = Value::Null;
     let mut expect_mismatch = false;
     if let Some(expected) = &args.expect {
-        let matches = inspection.seal_matches(expected);
-        expect_mismatch = !matches;
+        let (line, matches) = expected_seal_line(&inspection, expected);
+        text.push_str(&line);
         fields["seal_matches"] = Value::Bool(matches);
-        if matches {
-            text.push_str("expected seal: matches
-");
-        } else {
+        expect_mismatch = !matches;
+        if !matches {
             code = 1;
-            let why = if inspection.unreadable.is_some() || !inspection.problems.is_empty() {
-                " (the file does not verify, so its stored seal vouches for nothing)"
-            } else {
-                ""
-            };
-            text.push_str(&format!("expected seal: the seal does not match --expect {expected}{why}
-"));
         }
     }
     if args.run {
