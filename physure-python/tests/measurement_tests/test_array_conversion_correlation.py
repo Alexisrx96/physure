@@ -625,3 +625,14 @@ def test_the_store_keeps_no_scalar_model_alive():
     for value in range(5):
         _ = b + Q_(float(value), "m", 0.01)
     assert _store()._model_slots == {}
+
+
+def test_np_concatenate_of_uncertain_arrays_is_refused():
+    # it gave an uncertainty of 0.0; exact arrays concatenate as before
+    a = _array()
+    exact = Q_(np.array([4.0, 5.0]), "m")
+    for parts in ([a.to("cm"), a.to("cm")], [exact, a], [a, exact]):
+        with pytest.raises(TypeError, match="concatenate"):
+            np.concatenate(parts)
+    joined = np.concatenate([exact, exact])
+    np.testing.assert_array_equal(joined.magnitude, [4.0, 5.0, 4.0, 5.0])
