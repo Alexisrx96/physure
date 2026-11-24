@@ -75,8 +75,25 @@ fn is_a_fragment_of_context(origin: &str) -> bool {
     FRAGMENTS_OF_CONTEXT.iter().any(|(file, blocks)| blocks.iter().any(|block| origin.ends_with(&format!("{file} block {block}"))))
 }
 
-#[test]
-fn no_documented_program_relies_on_an_unbound_name() {
+/// The programs of the `phs` blocks of the Markdown file `path` (whose text is `text`), each with where it comes from.
+fn markdown_programs(path: &Path, text: &str, programs: &mut Vec<(String, String)>) {
+    let cumulative = CUMULATIVE.iter().any(|name| path.ends_with(name));
+    let mut earlier = String::new();
+    for (i, block) in blocks(text).into_iter().enumerate() {
+        let origin = format!("{} block {i}", path.display());
+        if !cumulative {
+            programs.push((origin, block));
+            continue;
+        }
+        programs.push((origin.clone(), format!("{earlier}{block}")));
+        if !is_a_fragment_of_context(&origin) {
+            earlier.push_str(&block);
+        }
+    }
+}
+
+/// Every documented program: the `.phs` files and the `phs` blocks of the Markdown files of the repository.
+fn documented_programs() -> Vec<(String, String)> {
     let mut programs: Vec<(String, String)> = Vec::new();
     let mut phs = Vec::new();
     files(&root(), "phs", &mut phs);
@@ -87,35 +104,31 @@ fn no_documented_program_relies_on_an_unbound_name() {
     files(&root(), "md", &mut markdown);
     for path in markdown {
         let text = std::fs::read_to_string(&path).unwrap_or_default();
-        let cumulative = CUMULATIVE.iter().any(|name| path.ends_with(name));
-        let mut earlier = String::new();
-        for (i, block) in blocks(&text).into_iter().enumerate() {
-            let origin = format!("{} block {i}", path.display());
-            if !cumulative {
-                programs.push((origin, block));
-                continue;
-            }
-            programs.push((origin.clone(), format!("{earlier}{block}")));
-            if !is_a_fragment_of_context(&origin) {
-                earlier.push_str(&block);
-            }
-        }
+        markdown_programs(&path, &text, &mut programs);
     }
+    programs
+}
+
+/// The finding of an unbound name in the program `source`, `None` when it has none or is not checked.
+fn unbound_name_finding(origin: &str, source: &str) -> Option<String> {
+    if SHOWS_THE_ERROR.iter().any(|shown| source.contains(shown)) || is_a_fragment_of_context(origin) {
+        return None;
+    }
+    let report = evaluate(source, Limits::sandboxed(Duration::from_secs(10)), DEFAULT_SEED);
+    // the runtime error, or the checker's finding of the same name (the report says one problem once, and then
+    // only the checker's words remain)
+    let finding = report.diagnostics.iter().find(|d| d.message.contains("has no value") || d.code == "unknown-name")?;
+    Some(format!("{origin}: line {}: {}", finding.line, finding.message.lines().next().unwrap_or("")))
+}
+
+#[test]
+fn no_documented_program_relies_on_an_unbound_name() {
+    let programs = documented_programs();
     assert!(programs.len() > 50, "found only {} programs: the search is broken", programs.len());
     println!("{} documented programs", programs.len());
 
-    let mut reliant = Vec::new();
-    for (origin, source) in &programs {
-        if SHOWS_THE_ERROR.iter().any(|shown| source.contains(shown)) || is_a_fragment_of_context(origin) {
-            continue;
-        }
-        let report = evaluate(source, Limits::sandboxed(Duration::from_secs(10)), DEFAULT_SEED);
-        // the runtime error, or the checker's finding of the same name (the report says one problem once, and then
-        // only the checker's words remain)
-        if let Some(finding) = report.diagnostics.iter().find(|d| d.message.contains("has no value") || d.code == "unknown-name") {
-            reliant.push(format!("{origin}: line {}: {}", finding.line, finding.message.lines().next().unwrap_or("")));
-        }
-    }
+    let reliant: Vec<String> =
+        programs.iter().filter_map(|(origin, source)| unbound_name_finding(origin, source)).collect();
     assert!(reliant.is_empty(), "programs that rely on an unbound name:
 {}", reliant.join("
 "));
