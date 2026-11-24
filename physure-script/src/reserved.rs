@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 
-use crate::ast::{ImportNode, ImportSpecifier};
+use crate::ast::{ImportNode, ImportSpecifier, ImportSymbol};
 
 /// The class of a reserved name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,44 +133,59 @@ pub fn plan_import(
     held: &dyn Fn(&str) -> bool,
     unlocked: &Unlocked,
 ) -> Result<Vec<(String, (&'static str, String))>, ImportError> {
-    let mut imports = Vec::new();
     match &node.specifier {
         ImportSpecifier::Wildcard => {
-            for &member in members {
-                if held(member) {
-                    return Err(ImportError::Reserved(module_import_error(member, domain)));
-                }
-                // an alias of this module on the same name is a remap; another module's function of that name
-                // is replaced by the later import, as it always was
-                if let Some((other, canonical)) = unlocked.get(member) {
-                    if *other == domain && canonical != member {
-                        return Err(ImportError::Reserved(module_remap_error(member, domain)));
-                    }
-                }
-                imports.push((member.to_string(), (domain, member.to_string())));
-            }
+            members.iter().map(|&member| plan_wildcard_member(member, domain, held, unlocked)).collect()
         }
         ImportSpecifier::Symbols(syms) => {
-            for sym in syms {
-                if !members.contains(&sym.name.as_str()) {
-                    return Err(ImportError::NoSuchFunction(format!("no such function '{}' in domain '{}'", sym.name, node.path)));
-                }
-                let call_name = sym.alias.as_deref().unwrap_or(&sym.name).to_string();
-                if held(&call_name) {
-                    return Err(ImportError::Reserved(module_import_error(&call_name, domain)));
-                }
-                let wanted = (domain, sym.name.clone());
-                if let Some((other, canonical)) = unlocked.get(&call_name) {
-                    if (*other, canonical) != (wanted.0, &wanted.1) {
-                        return Err(ImportError::Reserved(module_remap_error(&call_name, other)));
-                    }
-                }
-                imports.push((call_name, wanted));
-            }
+            syms.iter().map(|sym| plan_symbol(sym, node, domain, members, held, unlocked)).collect()
         }
-        ImportSpecifier::ModuleAlias(_) => {}
+        ImportSpecifier::ModuleAlias(_) => Ok(Vec::new()),
     }
-    Ok(imports)
+}
+
+/// What `use <domain>.*` unlocks for its function `member`, or why it is refused.
+fn plan_wildcard_member(
+    member: &str,
+    domain: &'static str,
+    held: &dyn Fn(&str) -> bool,
+    unlocked: &Unlocked,
+) -> Result<(String, (&'static str, String)), ImportError> {
+    if held(member) {
+        return Err(ImportError::Reserved(module_import_error(member, domain)));
+    }
+    // an alias of this module on the same name is a remap; another module's function of that name is replaced by
+    // the later import, as it always was
+    let remaps = unlocked.get(member).is_some_and(|(other, canonical)| *other == domain && canonical != member);
+    if remaps {
+        return Err(ImportError::Reserved(module_remap_error(member, domain)));
+    }
+    Ok((member.to_string(), (domain, member.to_string())))
+}
+
+/// What a named import of `sym` (with its alias, if any) unlocks, or why it is refused.
+fn plan_symbol(
+    sym: &ImportSymbol,
+    node: &ImportNode,
+    domain: &'static str,
+    members: &[&str],
+    held: &dyn Fn(&str) -> bool,
+    unlocked: &Unlocked,
+) -> Result<(String, (&'static str, String)), ImportError> {
+    if !members.contains(&sym.name.as_str()) {
+        return Err(ImportError::NoSuchFunction(format!("no such function '{}' in domain '{}'", sym.name, node.path)));
+    }
+    let call_name = sym.alias.as_deref().unwrap_or(&sym.name).to_string();
+    if held(&call_name) {
+        return Err(ImportError::Reserved(module_import_error(&call_name, domain)));
+    }
+    let wanted = (domain, sym.name.clone());
+    if let Some((other, canonical)) = unlocked.get(&call_name) {
+        if (*other, canonical) != (wanted.0, &wanted.1) {
+            return Err(ImportError::Reserved(module_remap_error(&call_name, other)));
+        }
+    }
+    Ok((call_name, wanted))
 }
 
 #[cfg(test)]
