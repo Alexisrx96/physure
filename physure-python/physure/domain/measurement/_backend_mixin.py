@@ -384,7 +384,12 @@ class BackendMixin:
     def _numpy_concatenate(
         self, np: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
     ) -> Any:
-        """Collect magnitudes from a same-unit sequence and concatenate them."""
+        """Collect magnitudes from a same-unit sequence and concatenate them.
+
+        Exact quantities only: the result's elements would be the parts' own, and
+        nothing here gives them their slots in the covariance store, so an uncertain
+        part is refused rather than concatenated to an uncertainty of 0.
+        """
         mags = []
         unit = None
         for arg in args[0]:
@@ -394,6 +399,13 @@ class BackendMixin:
                 unit = arg.unit
             elif arg.unit != unit:
                 return NotImplemented  # Strict unit check
+            if not arg._exact_operand():
+                raise TypeError(
+                    "np.concatenate of quantities with an uncertainty cannot keep "
+                    "it yet (their correlations are not carried into the result); "
+                    "concatenate the magnitudes on purpose (q.magnitude) and give "
+                    "the result its uncertainty"
+                )
             mags.append(arg.magnitude)
         res_mag = np.concatenate(mags, **kwargs)
         # ponytail: BackendMixin is only ever mixed into Quantity, whose
