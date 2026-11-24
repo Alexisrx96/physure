@@ -245,6 +245,76 @@ mod tests {
         assert!(matches!(&error, ImportError::Reserved(m) if m.contains("already a function of `calc`")), "{error:?}");
     }
 
+    /// Characterization (sonar S3776 cleanup): what `plan_import` answers, in order, for every kind of import over
+    /// held names and earlier imports of this module and of another one.
+    #[test]
+    fn the_plans_of_imports_are_pinned() {
+        let mut unlocked = Unlocked::new();
+        unlocked.insert("solve".to_string(), ("calc", "solve".to_string()));
+        unlocked.insert("lim".to_string(), ("calc", "limit".to_string()));
+        unlocked.insert("deriv".to_string(), ("array", "deriv".to_string()));
+        unlocked.insert("d".to_string(), ("array", "dot".to_string()));
+        let wildcard = ImportSpecifier::Wildcard;
+        let one = |name: &str, alias: Option<&str>| ImportSpecifier::Symbols(vec![symbol(name, alias)]);
+        let mut remapped = Unlocked::new();
+        remapped.insert("limit".to_string(), ("calc", "solve".to_string()));
+        let cases: Vec<(ImportSpecifier, &[&str], u8)> = vec![
+            (wildcard.clone(), &[], 0),
+            (wildcard.clone(), &[], 1),
+            (wildcard.clone(), &["solve"], 1),
+            (wildcard.clone(), &["x"], 1),
+            (ImportSpecifier::Symbols(vec![symbol("limit", None), symbol("solve", Some("s")), symbol("deriv", None)]), &[], 0),
+            (ImportSpecifier::Symbols(vec![symbol("limit", None), symbol("solve", Some("s")), symbol("deriv", None)]), &[], 1),
+            (ImportSpecifier::Symbols(vec![symbol("limit", None), symbol("nope", None), symbol("solve", None)]), &["limit"], 0),
+            (one("limit", Some("lim")), &[], 1),
+            (one("solve", Some("lim")), &[], 1),
+            (one("solve", Some("d")), &[], 1),
+            (one("solve", Some("s")), &["s"], 1),
+            (one("nope", Some("s")), &["s"], 1),
+            (ImportSpecifier::Symbols(vec![]), &["limit"], 1),
+            (ImportSpecifier::ModuleAlias("c".to_string()), &["limit"], 1),
+            (wildcard.clone(), &[], 2),
+            (one("limit", None), &[], 2),
+            (one("solve", Some("limit")), &[], 2),
+        ];
+        let answers: Vec<String> = cases
+            .into_iter()
+            .map(|(specifier, held, earlier)| {
+                let held = |name: &str| held.contains(&name);
+                let earlier = match earlier {
+                    0 => Unlocked::new(),
+                    1 => unlocked.clone(),
+                    _ => remapped.clone(),
+                };
+                let mut plan = plan_import(&import("calc", specifier), "calc", &MEMBERS, &held, &earlier);
+                if let Ok(imports) = &mut plan {
+                    imports.sort();
+                }
+                format!("{plan:?}")
+            })
+            .collect();
+        let expected: &[&str] = &[
+            "Ok([(\"deriv\", (\"calc\", \"deriv\")), (\"limit\", (\"calc\", \"limit\")), (\"solve\", (\"calc\", \"solve\"))])",
+            "Ok([(\"deriv\", (\"calc\", \"deriv\")), (\"limit\", (\"calc\", \"limit\")), (\"solve\", (\"calc\", \"solve\"))])",
+            "Err(Reserved(\"`solve` is a function of `calc`, which this program imports, and `solve` is already bound in the program or by its host; choose another name for it\"))",
+            "Ok([(\"deriv\", (\"calc\", \"deriv\")), (\"limit\", (\"calc\", \"limit\")), (\"solve\", (\"calc\", \"solve\"))])",
+            "Ok([(\"deriv\", (\"calc\", \"deriv\")), (\"limit\", (\"calc\", \"limit\")), (\"s\", (\"calc\", \"solve\"))])",
+            "Err(Reserved(\"`deriv` is already a function of `array` in this program and cannot be imported under that name as something else; choose another alias\"))",
+            "Err(Reserved(\"`limit` is a function of `calc`, which this program imports, and `limit` is already bound in the program or by its host; choose another name for it\"))",
+            "Ok([(\"lim\", (\"calc\", \"limit\"))])",
+            "Err(Reserved(\"`lim` is already a function of `calc` in this program and cannot be imported under that name as something else; choose another alias\"))",
+            "Err(Reserved(\"`d` is already a function of `array` in this program and cannot be imported under that name as something else; choose another alias\"))",
+            "Err(Reserved(\"`s` is a function of `calc`, which this program imports, and `s` is already bound in the program or by its host; choose another name for it\"))",
+            "Err(NoSuchFunction(\"no such function 'nope' in domain 'calc'\"))",
+            "Ok([])",
+            "Ok([])",
+            "Err(Reserved(\"`limit` is already a function of `calc` in this program and cannot be imported under that name as something else; choose another alias\"))",
+            "Err(Reserved(\"`limit` is already a function of `calc` in this program and cannot be imported under that name as something else; choose another alias\"))",
+            "Ok([(\"limit\", (\"calc\", \"solve\"))])",
+        ];
+        assert_eq!(answers, expected);
+    }
+
     #[test]
     fn the_keywords_are_those_of_the_grammar() {
         let pest = include_str!("phs.pest");
