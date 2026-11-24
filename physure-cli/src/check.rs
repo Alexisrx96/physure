@@ -17,13 +17,13 @@ pub fn run_check(args: &[String]) {
     let files: Vec<&str> = args.iter().skip(2).filter(|a| !a.starts_with("--")).map(String::as_str).collect();
     if files.is_empty() {
         eprintln!("usage: phs check <file.phs>... [--json]");
-        std::process::exit(2);
+        crate::exit(2);
     }
     let report = check_files(&files, json);
     if !report.output.is_empty() {
         println!("{}", report.output);
     }
-    std::process::exit(report.exit_code);
+    crate::exit(report.exit_code);
 }
 
 pub fn check_files(files: &[&str], json: bool) -> Report {

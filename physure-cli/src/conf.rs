@@ -10,7 +10,6 @@
 use std::collections::BTreeSet;
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
-use std::process;
 
 use physure_core::frozen::active::resolve_process;
 use physure_core::frozen::canonical::canonical_text;
@@ -296,7 +295,7 @@ pub fn run_conf(args: &[String]) -> ! {
     } else {
         say(&escape_controls(&outcome.text));
     }
-    process::exit(outcome.code)
+    crate::exit(outcome.code)
 }
 
 /// The flags and the number of positional arguments each command takes.

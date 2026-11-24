@@ -90,7 +90,7 @@ fn run_child(exe: &std::path::Path, args: &[String], stdin: &str, limit: Duratio
 pub fn run_mcp() {
     let runner = ChildRunner::current().unwrap_or_else(|error| {
         eprintln!("phs mcp: cannot find its own executable: {error}");
-        std::process::exit(2);
+        crate::exit(2);
     });
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();

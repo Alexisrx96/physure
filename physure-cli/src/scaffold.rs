@@ -8,7 +8,6 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process;
 
 use crate::get_flag_value;
 
@@ -17,7 +16,7 @@ pub fn run_new_plugin(args: &[String]) {
         Some(n) if !n.starts_with('-') => n.clone(),
         _ => {
             eprintln!("Usage: phs new-plugin <name> [--lang rust|python|both] [--dir <path>]");
-            process::exit(1);
+            crate::exit(1);
         }
     };
 
@@ -49,7 +48,7 @@ pub fn run_new_plugin(args: &[String]) {
         }
         other => {
             eprintln!("error: unknown --lang '{}', expected rust, python, or both", other);
-            process::exit(1);
+            crate::exit(1);
         }
     }
 }
@@ -70,12 +69,12 @@ fn write_file(path: &Path, contents: &str) {
     if let Some(parent) = path.parent() {
         if let Err(e) = fs::create_dir_all(parent) {
             eprintln!("error creating directory '{}': {}", parent.display(), e);
-            process::exit(1);
+            crate::exit(1);
         }
     }
     if let Err(e) = fs::write(path, contents) {
         eprintln!("error writing '{}': {}", path.display(), e);
-        process::exit(1);
+        crate::exit(1);
     }
     println!("wrote {}", path.display());
 }

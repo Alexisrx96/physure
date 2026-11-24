@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::env;
 use std::fs;
-use std::process;
 use physure_script::{parse_phs, transpile, PhsInterpreter, PhsValue, Target};
 
 mod check;
@@ -182,7 +181,7 @@ fn handle_transpile(args: &[String]) -> bool {
         Some(p) => p,
         None => {
             eprintln!("Error: missing script file path for transpilation");
-            process::exit(1);
+            exit(1);
         }
     };
 
@@ -194,7 +193,7 @@ fn handle_transpile(args: &[String]) -> bool {
         Ok(c) => c,
         Err(e) => {
             eprintln!("Error reading file '{}': {}", script_path, e);
-            process::exit(1);
+            exit(1);
         }
     };
 
@@ -202,7 +201,7 @@ fn handle_transpile(args: &[String]) -> bool {
         Ok(p) => p,
         Err(e) => {
             eprintln!("Error parsing script '{}': {:?}", script_path, e);
-            process::exit(1);
+            exit(1);
         }
     };
 
@@ -210,7 +209,7 @@ fn handle_transpile(args: &[String]) -> bool {
         Ok(r) => r,
         Err(e) => {
             eprintln!("Transpilation error: {}", e);
-            process::exit(1);
+            exit(1);
         }
     };
 
@@ -234,7 +233,7 @@ fn handle_transpile(args: &[String]) -> bool {
 
     if let Err(e) = fs::write(&out_file_path, &result) {
         eprintln!("Error writing output file '{}': {}", out_file_path, e);
-        process::exit(1);
+        exit(1);
     }
 
     let target_name = match target {
@@ -773,7 +772,7 @@ fn run_subcommand(args: &[String]) -> bool {
         "register-protocol" => {
             if let Err(e) = protocol::register_phs_protocol() {
                 eprintln!("Failed to register phs:// protocol: {}", e);
-                process::exit(1);
+                exit(1);
             }
         }
         "new-plugin" => scaffold::run_new_plugin(args),
@@ -797,7 +796,7 @@ fn read_script_or_snippet(raw_input: &str) -> String {
         content
     } else if raw_input.ends_with(".phs") {
         eprintln!("error: file not found '{}'", raw_input);
-        process::exit(1);
+        exit(1);
     } else {
         raw_input.to_string()
     }
@@ -893,11 +892,32 @@ fn run_statements(
                     .and_then(|n| code.lines().nth(n.saturating_sub(1)))
                     .unwrap_or("");
                 RichRenderer::render_runtime_error(raw_input, &e, &expr_code, line_no, line_text);
-                process::exit(1);
+                exit(1);
             }
         }
     }
     steps
+}
+
+/// Ends the process with `code`, running what the C runtime registered with `atexit` on the way out.
+///
+/// On Windows `std::process::exit` is `ExitProcess`, which skips those handlers, and one of them writes the
+/// coverage profile of an instrumented build: every run of `phs` that ended in an exit code (each `phs conf`
+/// command, each refusal) recorded nothing, however many tests ran it. The C runtime's `exit` runs the handlers and
+/// then ends the process the same way; elsewhere `std::process::exit` already is the C `exit`.
+pub(crate) fn exit(code: i32) -> ! {
+    #[cfg(windows)]
+    {
+        extern "C" {
+            #[link_name = "exit"]
+            fn c_runtime_exit(code: i32) -> !;
+        }
+        // SAFETY: the C runtime's `exit` accepts any status and does not return; Rust registers no `atexit`
+        // handler of its own, so nothing runs that `std::process::exit` would not have allowed.
+        unsafe { c_runtime_exit(code) }
+    }
+    #[cfg(not(windows))]
+    std::process::exit(code)
 }
 
 fn main() {
@@ -924,7 +944,7 @@ fn refuse_an_unusable_configuration() {
     }
     if let Err(e) = physure_core::frozen::ensure_valid() {
         eprintln!("phs: refusing to run: {e}");
-        process::exit(e.exit_code());
+        exit(e.exit_code());
     }
 }
 
@@ -943,7 +963,7 @@ fn run_script(args: &[String]) {
         Ok(s) => s,
         Err(e) => {
             RichRenderer::render_parse_error(raw_input, &e, &code);
-            process::exit(1);
+            exit(1);
         }
     };
 
