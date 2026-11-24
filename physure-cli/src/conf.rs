@@ -326,57 +326,72 @@ fn shape(command: &str) -> (&'static [&'static str], usize) {
     }
 }
 
-fn run(args: &ConfArgs) -> Outcome {
-    let command = args.command.as_str();
+/// The misuse of the command's shape, if any: an unknown command, a flag or an argument too many, a FILE and --conf
+/// together. Decided without reading anything.
+fn shape_misuse(command: &str, args: &ConfArgs) -> Option<Outcome> {
     if !COMMANDS.contains(&command) {
-        return failure("conf", 2, format!("unknown command {command:?}; the commands are: {}", COMMANDS.join(", ")));
+        return Some(failure("conf", 2, format!("unknown command {command:?}; the commands are: {}", COMMANDS.join(", "))));
     }
     if command == "freeze" && args.conf.is_some() {
-        return failure(
+        return Some(failure(
             command,
             2,
             "`phs conf freeze` does not take --conf: it makes a new file from what is in force unfrozen; name where it goes with --out",
-        );
+        ));
     }
     let (flags, positional) = shape(command);
     if let Some(flag) = args.given.iter().find(|f| !flags.contains(f)) {
-        return failure(command, 2, format!("`phs conf {command}` does not take {flag}; it takes: {}", flags.join(", ")));
+        return Some(failure(command, 2, format!("`phs conf {command}` does not take {flag}; it takes: {}", flags.join(", "))));
     }
     if args.positional.len() > positional {
-        return failure(
+        return Some(failure(
             command,
             2,
             format!("`phs conf {command}` takes at most {positional} argument(s), found: {}", args.positional.join(" ")),
-        );
+        ));
     }
-    // what is decided without reading anything: misuse comes before any file is read
     if args.conf.is_some() && !args.positional.is_empty() && ["verify", "history", "diff"].contains(&command) {
-        return failure(
+        return Some(failure(
             command,
             2,
             format!(
                 "`phs conf {command}` was given both a FILE ({}) and --conf: which one it acts on would be ambiguous; give one",
                 args.positional.join(" ")
             ),
-        );
+        ));
     }
+    None
+}
+
+/// The misuse of a flag's value, if any: a missing or multi-line --reason, --timeout-ms without --run, an --expect
+/// that is not a seal. Decided without reading anything.
+fn value_misuse(command: &str, args: &ConfArgs) -> Option<String> {
     if ["freeze", "update", "seal"].contains(&command) && args.reason.as_deref().is_none_or(|r| r.trim().is_empty()) {
-        return failure(command, 2, format!("`phs conf {command}` needs --reason \"...\" (not empty): the history records why"));
+        return Some(format!("`phs conf {command}` needs --reason \"...\" (not empty): the history records why"));
     }
     if let Some(control) = args.reason.as_deref().and_then(|r| r.chars().find(|c| c.is_control())) {
-        return failure(
-            command,
-            2,
-            format!("--reason must be one line without control characters (the history records it), found the control character {control:?}"),
-        );
+        return Some(format!(
+            "--reason must be one line without control characters (the history records it), found the control character {control:?}"
+        ));
     }
     if args.timeout_ms.is_some() && !args.run {
-        return failure(command, 2, "--timeout-ms bounds the witnesses of --run: give it with --run");
+        return Some("--timeout-ms bounds the witnesses of --run: give it with --run".to_string());
     }
-    if let Some(expected) = &args.expect {
-        if expected.len() != 64 || !expected.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return failure(command, 2, format!("--expect takes a seal: 64 hexadecimal characters, found {expected:?}"));
-        }
+    let expected = args.expect.as_ref()?;
+    if expected.len() != 64 || !expected.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Some(format!("--expect takes a seal: 64 hexadecimal characters, found {expected:?}"));
+    }
+    None
+}
+
+fn run(args: &ConfArgs) -> Outcome {
+    let command = args.command.as_str();
+    // what is decided without reading anything: misuse comes before any file is read
+    if let Some(outcome) = shape_misuse(command, args) {
+        return outcome;
+    }
+    if let Some(message) = value_misuse(command, args) {
+        return failure(command, 2, message);
     }
     if let Ok(exe) = std::env::current_exe() {
         set_engine_file(Some(exe));
