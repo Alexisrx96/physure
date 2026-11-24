@@ -1878,4 +1878,193 @@ mod tests {
         assert!(shape("verify").0.contains(&"--run") && shape("verify").0.contains(&"--timeout-ms"));
         assert!(!shape("status").0.contains(&"--run"));
     }
+
+    /// Characterization of `parse` before its split: every value flag and switch lands in its field, in order.
+    #[test]
+    fn parse_puts_every_flag_and_switch_in_its_field() {
+        let parsed = parse(&args(&[
+            "seal", "--conf", "c.conf", "--reason", "why", "--engine-policy", "binary", "--out", "o.conf", "--expect", "ee",
+            "--witness", "w.phs", "--timeout-ms", "9", "--accept-witness-changes", " b, a ,b", "--json", "--yes", "--origin", "--run",
+            "extra", "more",
+        ]))
+        .unwrap();
+        assert_eq!(parsed.command, "seal");
+        assert_eq!(parsed.positional, vec!["extra", "more"]);
+        assert_eq!(parsed.conf, Some(PathBuf::from("c.conf")));
+        assert_eq!(parsed.reason.as_deref(), Some("why"));
+        assert_eq!(parsed.policy, Some(EnginePolicy::Binary));
+        assert_eq!(parsed.out, Some(PathBuf::from("o.conf")));
+        assert_eq!(parsed.expect.as_deref(), Some("ee"));
+        assert_eq!(parsed.witness, vec![PathBuf::from("w.phs")]);
+        assert_eq!(parsed.timeout_ms, Some(9));
+        assert_eq!(parsed.accept, Some(Accept::Keys(vec!["b".into(), "a".into()])));
+        assert!(parsed.json && parsed.yes && parsed.origin && parsed.run && !parsed.help);
+        assert_eq!(
+            parsed.given,
+            vec![
+                "--conf", "--reason", "--engine-policy", "--out", "--expect", "--witness", "--timeout-ms", "--accept-witness-changes",
+                "--json", "--yes", "--origin", "--run"
+            ]
+        );
+        for help in ["--help", "-h"] {
+            let parsed = parse(&args(&[help])).unwrap();
+            assert!(parsed.help && !parsed.json, "{help}");
+            assert_eq!((parsed.command.as_str(), parsed.given.clone()), ("status", vec![help]));
+        }
+        assert_eq!(parse(&args(&["--accept-witness-changes", " all "])).unwrap().accept, Some(Accept::All));
+        assert_eq!(
+            parse(&args(&["--accept-witness-changes", "a,,b"])).unwrap_err(),
+            "--accept-witness-changes takes all or a comma-separated list of witness keys (builtin.<id>, user.<name>), found \"a,,b\""
+        );
+        assert_eq!(parse(&args(&["--out", "--json"])).unwrap_err(), "--out expects a value, found none");
+        assert_eq!(parse(&args(&["--timeout-ms", "0"])).unwrap_err(), "--timeout-ms takes a whole number of milliseconds above 0, found \"0\"");
+        assert_eq!(parse(&args(&["--expect", "a", "--expect", "b"])).unwrap_err(), "--expect is given twice; expected it once (only --witness may be repeated)");
+        assert_eq!(parse(&args(&["--yes", "--yes"])).unwrap().given, vec!["--yes", "--yes"], "a switch may be repeated");
+        assert_eq!(
+            parse(&args(&["-x"])).unwrap_err(),
+            format!("unknown flag -x; the flags of `phs conf` are: {}", accepted_flags())
+        );
+    }
+
+    /// Characterization of `run` before its split: each misuse is refused with its message and exit 2, before anything
+    /// is read or put in force.
+    #[test]
+    fn run_refuses_each_misuse_with_its_message() {
+        let hex = "a".repeat(64);
+        let cases: Vec<(Vec<&str>, &str, String)> = vec![
+            (vec!["nope"], "conf", "unknown command \"nope\"; the commands are: status, show, diff, update, seal, history, freeze, verify".into()),
+            (
+                vec!["freeze", "--conf", "x", "--reason", "r"],
+                "freeze",
+                "`phs conf freeze` does not take --conf: it makes a new file from what is in force unfrozen; name where it goes with --out".into(),
+            ),
+            (vec!["status", "--origin"], "status", "`phs conf status` does not take --origin; it takes: --conf, --json".into()),
+            (vec!["show", "a", "b"], "show", "`phs conf show` takes at most 1 argument(s), found: a b".into()),
+            (
+                vec!["history", "f.conf", "--conf", "g.conf"],
+                "history",
+                "`phs conf history` was given both a FILE (f.conf) and --conf: which one it acts on would be ambiguous; give one".into(),
+            ),
+            (vec!["update"], "update", "`phs conf update` needs --reason \"...\" (not empty): the history records why".into()),
+            (vec!["seal", "--reason", "  "], "seal", "`phs conf seal` needs --reason \"...\" (not empty): the history records why".into()),
+            (
+                vec!["freeze", "--reason", "a\tb"],
+                "freeze",
+                "--reason must be one line without control characters (the history records it), found the control character '\\t'".into(),
+            ),
+            (vec!["verify", "--timeout-ms", "5"], "verify", "--timeout-ms bounds the witnesses of --run: give it with --run".into()),
+            (vec!["verify", "--expect", "abc"], "verify", "--expect takes a seal: 64 hexadecimal characters, found \"abc\"".into()),
+            (
+                vec!["verify", "--expect", &hex[..63]],
+                "verify",
+                format!("--expect takes a seal: 64 hexadecimal characters, found {:?}", &hex[..63]),
+            ),
+        ];
+        for (items, command, message) in cases {
+            let outcome = run(&parse(&args(&items)).unwrap());
+            assert_eq!((outcome.code, outcome.error), (2, true), "{items:?}");
+            assert_eq!(outcome.text, message, "{items:?}");
+            assert_eq!(outcome.json, json!({ "schema": 1, "command": command, "error": message, "exit_code": 2 }), "{items:?}");
+        }
+        // the ambiguity is only for the commands whose positional argument is a file
+        let outcome = run(&parse(&args(&["diff", "a", "--conf", "b", "--expect", "x"])).unwrap());
+        assert!(outcome.text.starts_with("`phs conf diff` does not take --expect"), "{}", outcome.text);
+        assert_eq!(shape("nope"), (&[][..], 0));
+    }
+
+    /// Characterization of `witness_rows` before its split: every kind of row, in the order and wording shown.
+    #[test]
+    fn witness_rows_shows_every_kind_of_row() {
+        use crate::conf_witness::WitnessResult;
+        use physure_core::frozen::format_value;
+        use physure_script::report::Report;
+        let number = |mean: f64, unit: &str| format_value(&WitnessValue::Number { mean: mean.to_bits(), uncertainty: 0.5f64.to_bits(), unit: unit.into() });
+        let row = |key: &str, status| WitnessRow { key: key.into(), status };
+        let differs = |recorded: String, running: String, ulps| WitnessStatus::Differs { recorded, running, ulps };
+        let compared = WitnessReport {
+            rows: vec![
+                row("builtin.one", differs(number(1.0, "m"), number(1.0000000000000002, "m"), Some(1))),
+                row("builtin.many", differs(number(1.0, "m"), number(2.0, "m"), Some(7))),
+                row("builtin.unit", differs(number(1.0, "m"), number(1.0, "s"), None)),
+                row("user.mine", differs("sha256:aa".into(), "sha256:bb".into(), None)),
+                row("user.gone", differs("sha256:aa".into(), "sha256:cc".into(), None)),
+                row("builtin.text", differs("text=a".into(), "text=b".into(), None)),
+                row("builtin.same", WitnessStatus::Match),
+                row("builtin.lost", WitnessStatus::Missing),
+                row("builtin.fresh", WitnessStatus::New),
+                row("user.fresh", WitnessStatus::New),
+                row("builtin.bad", WitnessStatus::Error("it panicked".into())),
+                row("builtin.same2", WitnessStatus::Match),
+            ],
+        };
+        let result = WitnessResult {
+            report: Report { ok: true, results: Vec::new(), diagnostics: Vec::new() },
+            canonical: "phs-witness-1\nok true\n".into(),
+            sha256: "bb".into(),
+        };
+        let run = WitnessRun {
+            rows: Vec::new(),
+            user: vec![("mine".into(), Ok(result)), ("gone".into(), Err("failed".into()))],
+            stuck: false,
+        };
+        let (text, fields) = witness_rows(&compared, &run);
+        let expected = "\
+DIFFERS builtin.one
+  recorded: mean 3ff0000000000000 (1.0), uncertainty 3fe0000000000000 (0.5), unit \"m\"
+  running:  mean 3ff0000000000001 (1.0000000000000002), uncertainty 3fe0000000000000 (0.5), unit \"m\"
+  distance: 1 ulp
+DIFFERS builtin.many
+  recorded: mean 3ff0000000000000 (1.0), uncertainty 3fe0000000000000 (0.5), unit \"m\"
+  running:  mean 4000000000000000 (2.0), uncertainty 3fe0000000000000 (0.5), unit \"m\"
+  distance: 7 ulps
+DIFFERS builtin.unit
+  recorded: mean 3ff0000000000000 (1.0), uncertainty 3fe0000000000000 (0.5), unit \"m\"
+  running:  mean 3ff0000000000000 (1.0), uncertainty 3fe0000000000000 (0.5), unit \"s\"
+  distance: not measurable in ulps (a unit, a sign or a non-finite value differs)
+DIFFERS user.mine
+  recorded: sha256:aa
+  running:  sha256:bb
+  a user witness records a hash: only that its result changed is shown; the running canonical result (compare it with a copy kept outside):
+  | phs-witness-1
+  | ok true
+DIFFERS user.gone
+  recorded: sha256:aa
+  running:  sha256:cc
+  a user witness records a hash: only that its result changed is shown; the running canonical result (compare it with a copy kept outside):
+DIFFERS builtin.text
+  recorded: text=a
+  running:  text=b
+MISSING builtin.lost: recorded, but this build has no such witness
+NEW builtin.fresh: this build has it and the file does not record it (informational)
+NEW user.fresh: this build has it and the file does not record it (informational)
+ERROR builtin.bad: it panicked
+2 matched
+";
+        assert_eq!(text, expected);
+        let decimal = |mean: &str| json!({ "mean": mean, "uncertainty": "0.5" });
+        assert_eq!(
+            fields,
+            json!({
+                "match": 2,
+                "differs": [
+                    { "key": "builtin.one", "recorded": number(1.0, "m"), "running": number(1.0000000000000002, "m"), "ulps": 1,
+                      "recorded_decimal": decimal("1.0"), "running_decimal": decimal("1.0000000000000002") },
+                    { "key": "builtin.many", "recorded": number(1.0, "m"), "running": number(2.0, "m"), "ulps": 7,
+                      "recorded_decimal": decimal("1.0"), "running_decimal": decimal("2.0") },
+                    { "key": "builtin.unit", "recorded": number(1.0, "m"), "running": number(1.0, "s"), "ulps": null,
+                      "recorded_decimal": decimal("1.0"), "running_decimal": decimal("1.0") },
+                    { "key": "user.mine", "recorded": "sha256:aa", "running": "sha256:bb", "ulps": null,
+                      "running_canonical": "phs-witness-1\nok true\n" },
+                    { "key": "user.gone", "recorded": "sha256:aa", "running": "sha256:cc", "ulps": null, "running_canonical": "" },
+                    { "key": "builtin.text", "recorded": "text=a", "running": "text=b", "ulps": null },
+                ],
+                "missing": ["builtin.lost"],
+                "new": ["builtin.fresh", "user.fresh"],
+                "errors": [{ "key": "builtin.bad", "message": "it panicked" }],
+            })
+        );
+        let (text, fields) = witness_rows(&WitnessReport { rows: Vec::new() }, &WitnessRun { rows: Vec::new(), user: Vec::new(), stuck: false });
+        assert_eq!(text, "0 matched\n");
+        assert_eq!(fields, json!({ "match": 0, "differs": [], "missing": [], "new": [], "errors": [] }));
+    }
 }

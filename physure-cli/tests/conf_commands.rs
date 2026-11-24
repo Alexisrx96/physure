@@ -841,6 +841,65 @@ this is not a line
     assert!(doc["warnings"].to_string().contains("this is not a line"), "{doc}");
 }
 
+/// Characterization of `show` before its split: a pooled section shows the kind, a plain one does not; without
+/// --origin the JSON rows carry no origin; with --json the warnings of the reading are in the document, not on stderr.
+#[test]
+fn show_names_the_kind_in_pooled_sections_and_keeps_warnings_in_the_json_document() {
+    let dir = Dir::new("show_pooled");
+    let output = dir.conf(&["show", "units.m"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    let shown = lines(&output);
+    let prefixes: Vec<&str> = shown.iter().map(|l| l.split(" = ").next().unwrap()).collect();
+    assert_eq!(prefixes, vec!["units.m (base_unit)", "units.m (unit)", "units.m (unit_names)"], "{shown:?}");
+    assert!(!stdout(&dir.conf(&["show", "constants.molar_gas_constant"])).contains("(constant)"));
+    dir.write("physure.conf", "[Constants]\nmolar_gas_constant = 8.0 J*mol^-1*K^-1\nthis is not a line\n");
+    let output = dir.conf(&["show", "constants.molar_gas_constant", "--json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    assert!(stderr(&output).is_empty(), "{}", text(&output));
+    let doc = json(&output);
+    assert_eq!(doc["path"], Value::Null);
+    assert_eq!(doc["selector"], Value::from("constants.molar_gas_constant"));
+    assert_eq!(doc["exit_code"], Value::from(0));
+    assert_eq!(
+        doc["entries"],
+        serde_json::json!([{ "section": "constants", "key": "molar_gas_constant", "kind": "constant", "value": "8.0 J*mol^-1*K^-1" }])
+    );
+    assert_eq!(doc["warnings"].as_array().map(Vec::len), Some(1), "{doc}");
+    // frozen: the path of the file in force
+    let frozen = Dir::new("show_pooled_frozen");
+    freeze_cli(&frozen, &[]);
+    let doc = json(&frozen.conf(&["show", "units.m", "--json"]));
+    let path = PathBuf::from(doc["path"].as_str().unwrap_or_else(|| panic!("a path: {doc}")));
+    assert_eq!(path.canonicalize().unwrap(), frozen.path(FROZEN_FILE_NAME).canonicalize().unwrap());
+    let kinds: Vec<Value> = doc["entries"].as_array().unwrap().iter().map(|e| e["kind"].clone()).collect();
+    assert_eq!(kinds, vec![Value::from("base_unit"), Value::from("unit"), Value::from("unit_names")]);
+}
+
+/// Characterization of `verify` before its split: the line --expect adds, matched or not, and why a stored seal of a
+/// file that does not verify vouches for nothing.
+#[test]
+fn verify_says_whether_the_expected_seal_matches_and_why_not() {
+    let dir = Dir::new("verify_expect_lines");
+    let seal = seal_in(&stdout(&freeze_cli(&dir, &[])));
+    let output = dir.conf(&["verify", "--expect", &seal]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    assert!(stdout(&output).ends_with("expected seal: matches\n"), "{}", text(&output));
+    let wrong = "0".repeat(64);
+    let output = dir.conf(&["verify", "--expect", &wrong]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert!(stdout(&output).ends_with(&format!("expected seal: the seal does not match --expect {wrong}\n")), "{}", text(&output));
+    dir.write(FROZEN_FILE_NAME, &dir.read(FROZEN_FILE_NAME).replacen(R_VALUE, "= 8.31446261815325", 1));
+    let output = dir.conf(&["verify", "--expect", &seal]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert!(
+        stdout(&output).ends_with(&format!(
+            "expected seal: the seal does not match --expect {seal} (the file does not verify, so its stored seal vouches for nothing)\n"
+        )),
+        "{}",
+        text(&output)
+    );
+}
+
 // ---- Task 8: diff ----
 
 #[test]
