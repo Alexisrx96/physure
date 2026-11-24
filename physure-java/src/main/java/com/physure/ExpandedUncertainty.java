@@ -17,7 +17,7 @@ import java.util.Locale;
 public final class ExpandedUncertainty {
     private final double value;
     private final double standardUncertainty;
-    private final double expandedUncertainty;
+    private final double expanded;
     private final double coverageFactor;
     private final double coverageProbability;
     private final double effectiveDof;
@@ -27,7 +27,7 @@ public final class ExpandedUncertainty {
                         double coverageProbability, double effectiveDof, String unit) {
         this.value = value;
         this.standardUncertainty = standardUncertainty;
-        this.expandedUncertainty = expandedUncertainty;
+        this.expanded = expandedUncertainty;
         this.coverageFactor = coverageFactor;
         this.coverageProbability = coverageProbability;
         this.effectiveDof = effectiveDof;
@@ -46,7 +46,7 @@ public final class ExpandedUncertainty {
 
     /** The expanded uncertainty {@code U = k * u_c}. */
     public double getExpandedUncertainty() {
-        return expandedUncertainty;
+        return expanded;
     }
 
     /** The coverage factor {@code k}. */
@@ -71,7 +71,7 @@ public final class ExpandedUncertainty {
     /** {@code (value ± U) unit (k=..., p=... %)}, rounded as the Guide presents a result. */
     @Override
     public String toString() {
-        String[] shown = NativeEngine.gumRound(value, expandedUncertainty);
+        String[] shown = NativeEngine.gumRound(value, expanded);
         String probability = BigDecimal.valueOf(coverageProbability * 100).round(new MathContext(6)).stripTrailingZeros().toPlainString();
         return "(" + shown[0] + " ± " + shown[1] + ")" + (unit.isEmpty() ? "" : " " + unit)
             + " (k=" + String.format(Locale.ROOT, "%.2f", coverageFactor) + ", p=" + probability + " %)";
