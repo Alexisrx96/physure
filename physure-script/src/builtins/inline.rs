@@ -309,3 +309,111 @@ fn call_arguments<'t>(
     }
     Err(refusal(format!("the call of '{name}' in {text:?} is not closed")))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The functions every case may call: one per kind of body the inliner prints or refuses.
+    const DEFINITIONS: &[&str] = &[
+        "fn sq(x) = x^2",
+        "fn lin(a, b) = a * b / 2 - a + b",
+        "fn free(x) = x + k",
+        "fn kp(x) = k^x + (k)^2",
+        "fn lit(x) = x * 2.5 + (-3) * 4 m",
+        "fn big(x) = x * inf",
+        "fn unc(x) = x + 2 +/- 0.1",
+        "fn conv(x) = x => m",
+        "fn rng(x) = x..3",
+        "fn pw(x) = (x + 1)^3",
+        "fn nest(x) = sq(x) + sin(x)",
+        "fn cond(x) = if x > 0 then x else 0",
+        "fn wh(x) = y * 2 where y = x",
+        "fn vec(x) = [x, 1]",
+        "fn fmt(x) = format(\"{}\", x)",
+        "fn cmp(x) = x > 1",
+        "fn kw(x) = round(x, digits = 2)",
+        "fn pcall(f) = f(1)",
+        "fn text(x) = \"hello\"",
+        "fn yes(x) = True",
+        "fn no(x) = False",
+        "fn loop(x) = for i in 1..3 { i }",
+        "fn two(x) =
+    y = x
+    y",
+        "fn stmt(x) =
+    return x",
+        "fn asg(x) =
+    y = x",
+        "fn self_rec(x) = self_rec(x) + 1",
+        "fn ping(x) = pong(x)
+fn pong(x) = ping(x)",
+        "fn typed(x: m) = x",
+        "@stable
+fn deco(x) = x",
+    ];
+
+    /// Each expression and what the inliner makes of it (the inlined text, or the refusal), as it was before
+    /// `Inliner::expr` and `call_arguments` were split into helpers (sonar S3776).
+    const EXPECTED: &[(&str, &str)] = &[
+        ("t + 1", "ok t + 1"),
+        ("sq(t)", "ok (((t) ^ 2))"),
+        ("sq(2*t) + sq(sq(t))", "ok (((2*t) ^ 2)) + ((((((t) ^ 2))) ^ 2))"),
+        ("lin(t, y)", "ok ((((((t) * (y)) / 2) - (t)) + (y)))"),
+        ("lin(y, t)", "ok ((((((y) * (t)) / 2) - (y)) + (t)))"),
+        ("lin((t + 1), [1, 2])", "ok (((((((t + 1)) * ([1, 2])) / 2) - ((t + 1))) + ([1, 2])))"),
+        ("free(t)", "ok (((t) + k))"),
+        ("kp(t)", "ok ((((k) ^ (t)) + ((k) ^ 2)))"),
+        ("big(t)", "error 'big' cannot be inlined into a symbolic expression: its body holds the literal inf"),
+        ("asg(t)", "error 'asg' cannot be inlined into a symbolic expression: its body is a statement, not an expression"),
+        ("lit(t)", "ok ((((t) * 2.5) + (((-1) * 3) * (4 m))))"),
+        ("unc(t)", "error 'unc' cannot be inlined into a symbolic expression: its body holds the uncertain literal 2 (a symbolic expression carries no uncertainty)"),
+        ("conv(t)", "error 'conv' cannot be inlined into a symbolic expression: its body holds a conversion `=>`"),
+        ("rng(t)", "error 'rng' cannot be inlined into a symbolic expression: its body holds a range `..`"),
+        ("pw(t)", "ok ((((t) + 1) ^ 3))"),
+        ("nest(t)", "ok ((((((t)) ^ 2)) + sin((t))))"),
+        ("cond(t)", "error 'cond' cannot be inlined into a symbolic expression: its body holds a conditional"),
+        ("wh(t)", "error 'wh' cannot be inlined into a symbolic expression: its body holds a `where` binding"),
+        ("vec(t)", "error 'vec' cannot be inlined into a symbolic expression: its body holds a vector"),
+        ("fmt(t)", "error 'fmt' cannot be inlined into a symbolic expression: its body holds a formatted string"),
+        ("cmp(t)", "error 'cmp' cannot be inlined into a symbolic expression: its body holds a comparison or a logical operator"),
+        ("kw(t)", "error 'kw' cannot be inlined into a symbolic expression: its body holds a call of 'round' with keyword arguments"),
+        ("pcall(t)", "error 'pcall' cannot be inlined into a symbolic expression: its body holds a call of its parameter 'f'"),
+        ("text(t)", "error 'text' cannot be inlined into a symbolic expression: its body holds the string \"hello\""),
+        ("yes(t)", "error 'yes' cannot be inlined into a symbolic expression: its body holds the boolean True"),
+        ("no(t)", "error 'no' cannot be inlined into a symbolic expression: its body holds the boolean False"),
+        ("loop(t)", "error 'loop' cannot be inlined into a symbolic expression: its body holds a `for` loop"),
+        ("two(t)", "error 'two' cannot be inlined into a symbolic expression: its body is 2 statements, and only a body that is one expression can be"),
+        ("stmt(t)", "ok ((t))"),
+        ("self_rec(t)", "error 'self_rec' cannot be inlined into a symbolic expression: it is recursive (self_rec -> self_rec)"),
+        ("ping(t)", "error 'ping' cannot be inlined into a symbolic expression: it is recursive (ping -> pong -> ping)"),
+        ("typed(t)", "error 'typed' cannot be inlined into a symbolic expression: its parameter 'x' declares the unit m, which converts and checks the argument, and a symbolic expression cannot carry that"),
+        ("deco(t)", "error 'deco' cannot be inlined into a symbolic expression: it carries @stable, which the inlined body would not apply"),
+        ("sq()", "error 'sq' takes 1 argument (x), 0 given"),
+        ("sq(t, )", "error the call of 'sq' in \"sq(t, )\" has an empty argument"),
+        ("sq(, t)", "error the call of 'sq' in \"sq(, t)\" has an empty argument"),
+        ("sq(x = t)", "error the call of 'sq' in \"sq(x = t)\" names an argument, and an inlined call takes its arguments by position"),
+        ("sq(t", "error the call of 'sq' in \"sq(t\" is not closed"),
+        ("sq(f(t, 2), 3)", "error 'sq' takes 1 argument (x), 2 given"),
+        ("sq(t) * sqrt(t)", "ok (((t) ^ 2)) * sqrt(t)"),
+        ("sqrt(sq(t))", "ok sqrt((((t) ^ 2)))"),
+    ];
+
+    fn inlined(interpreter: &PhsInterpreter, text: &str) -> String {
+        match preprocess_symbolic_expression(text, interpreter, &HashMap::new()) {
+            Ok(text) => format!("ok {text}"),
+            Err(error) => format!("error {error}"),
+        }
+    }
+
+    #[test]
+    fn the_inlined_texts_and_refusals_are_pinned() {
+        let mut interpreter = PhsInterpreter::default();
+        for definition in DEFINITIONS {
+            interpreter.eval_str(definition).unwrap_or_else(|e| panic!("{definition:?}: {e}"));
+        }
+        for (text, expected) in EXPECTED {
+            assert_eq!(inlined(&interpreter, text), *expected, "{text:?}");
+        }
+    }
+}
