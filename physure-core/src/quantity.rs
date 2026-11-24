@@ -194,6 +194,21 @@ fn magnitude_exponent(x: f64) -> i32 {
     x.abs().log10().floor() as i32
 }
 
+/// 10^n as the double nearest to it, the same on every platform. `f64::powi` is not correctly rounded: from 10^23 (the
+/// first power of ten a double cannot hold exactly) it multiplies, and the answer is off by an ulp on some platforms
+/// and not on others, so `round(5e300, -301)` was `1e301` on Windows and `0.0` on Linux. A power of ten up to 10^22 is
+/// exact; any other is read from its decimal text, which the standard library rounds correctly (10^400 is infinity).
+fn pow10(n: i32) -> f64 {
+    const EXACT: [f64; 23] = [
+        1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20,
+        1e21, 1e22,
+    ];
+    if let Some(&power) = usize::try_from(n).ok().and_then(|i| EXACT.get(i)) {
+        return power;
+    }
+    format!("1e{n}").parse().unwrap_or(f64::INFINITY)
+}
+
 /// Rounds `x` to `decimal_places` digits after the decimal point, ties away from zero. Negative rounds to a power
 /// of ten instead (`-1` rounds to the nearest ten).
 ///
@@ -210,14 +225,14 @@ pub fn round_to_decimal_place(x: f64, decimal_places: i32) -> f64 {
         return x;
     }
     if decimal_places >= 0 {
-        let factor = 10f64.powi(decimal_places);
+        let factor = pow10(decimal_places);
         let scaled = x * factor;
         if !scaled.is_finite() || scaled.abs() >= WHOLE {
             return x;
         }
         return scaled.round() / factor;
     }
-    let divisor = decimal_places.checked_neg().map_or(f64::INFINITY, |places| 10f64.powi(places));
+    let divisor = decimal_places.checked_neg().map_or(f64::INFINITY, pow10);
     if !divisor.is_finite() {
         return 0.0;
     }
@@ -240,7 +255,7 @@ fn round_to_sig_figs(x: f64, sig_figs: u32) -> f64 {
 /// The single leading digit of `x`, once `x` is already a "clean" value at a known order of
 /// magnitude (as produced by `round_to_sig_figs`) -- `4` for `40.0`, `1` for `1.0`.
 fn leading_digit(x: f64) -> i64 {
-    (x.abs() / 10f64.powi(magnitude_exponent(x))).round() as i64
+    (x.abs() / pow10(magnitude_exponent(x))).round() as i64
 }
 
 /// GUM-style correlated rounding: under `[Settings] uncertainty_digits = gum` (the default) the
@@ -1347,6 +1362,27 @@ mod tests {
         assert_eq!(round_to_decimal_place(1235.0, -1), 1240.0);
         assert_eq!(round_to_decimal_place(1e300, -301), 0.0);
         assert_eq!(round_to_decimal_place(5e300, -301), 1e301);
+    }
+
+    /// A power of ten is the double nearest to it on every platform (`powi` is not: `round(5e300, -301)` was `0.0` on
+    /// Linux). The literals are the compiler's own, correctly rounded.
+    #[test]
+    fn a_power_of_ten_is_the_nearest_double() {
+        assert_eq!(pow10(0), 1.0);
+        assert_eq!(pow10(22), 1e22);
+        assert_eq!(pow10(23), 1e23);
+        assert_eq!(pow10(300), 1e300);
+        assert_eq!(pow10(301), 1e301);
+        assert_eq!(pow10(308), 1e308);
+        assert_eq!(pow10(-1), 1e-1);
+        assert_eq!(pow10(-5), 1e-5);
+        assert_eq!(pow10(-300), 1e-300);
+        assert!(pow10(309).is_infinite());
+        assert_eq!(pow10(-400), 0.0);
+        assert!(pow10(i32::MAX).is_infinite());
+        for n in -320..=320 {
+            assert_eq!(pow10(n).to_bits(), format!("1e{n}").parse::<f64>().unwrap().to_bits(), "10^{n}");
+        }
     }
 
     /// Over a grid of magnitudes and places: a finite value gives a finite one, rounding twice is rounding once, and a
